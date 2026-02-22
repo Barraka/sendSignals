@@ -65,7 +65,7 @@ async function scoreSignal(jsonPath, pngPath) {
   debug("Sending to Claude:", contextText);
 
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6-20250514",
+    model: "claude-sonnet-4-6-latest",
     max_tokens: 300,
     system: systemPrompt,
     messages: [
