@@ -246,13 +246,15 @@ function main() {
   log(`Score threshold: ${SCORE_THRESHOLD}`);
   log(`Pushover: ${PUSHOVER_USER ? "configured" : "NOT configured"}`);
 
-  const watcher = chokidar.watch(path.join(SIGNALS_FOLDER, "*.json"), {
+  const watcher = chokidar.watch(SIGNALS_FOLDER, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
   });
 
   watcher.on("add", (filePath) => {
-    processSignal(filePath);
+    if (path.extname(filePath).toLowerCase() === ".json") {
+      processSignal(filePath);
+    }
   });
 
   watcher.on("error", (err) => {
