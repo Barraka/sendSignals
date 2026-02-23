@@ -100,6 +100,8 @@ If the setup doesn't clearly match any type, flag it as UNCLEAR — these tend t
 RESPONSE FORMAT
 =====================
 
+CRITICAL: Output the structured fields FIRST, then your analysis. This ensures the key data is always captured.
+
 SCORE: [0-10]
 DIRECTION: [LONG/SHORT]
 SETUP: [A/B/C/D or UNCLEAR]
@@ -107,6 +109,8 @@ VERDICT: [GO / CAUTION / SKIP]
 RED FLAGS: [list any that apply, or "None"]
 REASON: [2-3 sentences: what makes this good or bad, referencing specific data points]
 EXIT SUGGESTION: [where to consider taking profit based on visible chart levels]
+
+Then optionally add detailed analysis below.
 
 Verdict rules:
 - GO: score >= 7, no red flags, clear setup type
