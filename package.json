@@ -1,15 +1,7 @@
+
 {
   "name": "signal-watcher",
-  "version": "1.0.0",
-  "description": "Watches MT4 signal screenshots, scores them with Claude, notifies via Pushover",
+  "version": "2.0.0",
   "main": "watcher.js",
-  "scripts": {
-    "start": "node watcher.js",
-    "dev": "node watcher.js --verbose"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "chokidar": "^4.0.0",
-    "dotenv": "^16.4.0"
-  }
+  "dependencies": { "chokidar": "^4.0.0", "dotenv": "^16.4.0" }
 }
