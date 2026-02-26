@@ -9,6 +9,7 @@ const SIGNALS_FOLDER = process.env.SIGNALS_FOLDER;
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
 const HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN;
 const VERBOSE = process.argv.includes("--verbose");
+const HISTORY_DIR = path.join(__dirname, "market_state_history");
 
 function log(...args) { console.log(`[${new Date().toISOString()}]`, ...args); }
 function verbose(...args) { if (VERBOSE) log("[VERBOSE]", ...args); }
@@ -120,15 +121,50 @@ Instructions:
   });
 }
 
-function sendMarketState(jsonData) {
+function getHistoryPath(symbol) {
+  return path.join(HISTORY_DIR, `${symbol}.json`);
+}
+
+function loadHistory(symbol) {
+  const filePath = getHistoryPath(symbol);
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    if (!Array.isArray(data)) return [];
+    return data;
+  } catch { return []; }
+}
+
+function appendHistory(snapshot) {
+  const symbol = snapshot.symbol || "unknown";
+  const today = (snapshot.time || "").slice(0, 10);
+  let history = loadHistory(symbol);
+
+  // Flush if the day changed
+  if (history.length > 0) {
+    const lastDay = (history[0].time || "").slice(0, 10);
+    if (lastDay !== today) {
+      verbose(`New day detected for ${symbol} — flushing history`);
+      history = [];
+    }
+  }
+
+  history.push(snapshot);
+  fs.writeFileSync(getHistoryPath(symbol), JSON.stringify(history, null, 2));
+  return history;
+}
+
+function sendMarketState(jsonData, history) {
   return new Promise((resolve, reject) => {
     if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN — skipping market state"); return resolve(); }
 
     const symbol = jsonData.symbol || "unknown";
     const time = jsonData.time || new Date().toISOString();
-    log(`Market state: ${symbol} at ${time}`);
 
-    const msg = `Market state update for ${symbol} at ${time}. Log this silently for context — do not post to Discord. Data: ${JSON.stringify(jsonData)}`;
+    const msg = `Market state update for ${symbol} at ${time}. Log this silently for context — do not post to Discord.
+
+Current snapshot: ${JSON.stringify(jsonData)}
+
+Today's history (${history.length} snapshots): ${JSON.stringify(history)}`;
 
     const payload = JSON.stringify({ message: msg });
 
@@ -202,7 +238,9 @@ async function handleJson(jsonPath) {
 
     if (jsonData.type === "market_state") {
       verbose(`Market state file detected: ${path.basename(jsonPath)}`);
-      sendMarketState(jsonData)
+      const history = appendHistory(jsonData);
+      log(`Market state: ${jsonData.symbol} — ${history.length} snapshots today`);
+      sendMarketState(jsonData, history)
         .then(() => verbose("Market state sent to Kit"))
         .catch((err) => log("Market state error:", err.message));
     } else {
@@ -218,6 +256,7 @@ if (!SIGNALS_FOLDER || !DISCORD_WEBHOOK) {
   process.exit(1);
 }
 if (!fs.existsSync(SIGNALS_FOLDER)) fs.mkdirSync(SIGNALS_FOLDER, { recursive: true });
+if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
 
 log(`Watching: ${SIGNALS_FOLDER}`);
 log(`Kit hook: ${HOOK_TOKEN ? "enabled (needs SSH tunnel)" : "disabled"}`);
@@ -226,4 +265,5 @@ const watcher = chokidar.watch(SIGNALS_FOLDER, {
   awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
 });
 watcher.on("add", (f) => path.extname(f).toLowerCase() === ".json" && handleJson(f));
+watcher.on("change", (f) => path.extname(f).toLowerCase() === ".json" && handleJson(f));
 log("Watcher started. Signals → Discord + Kit analysis");
