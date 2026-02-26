@@ -73,7 +73,7 @@ function postToDiscord(imagePaths, jsonData) {
   });
 }
 
-function wakeKit(jsonData, { h1Available = false } = {}) {
+function wakeKit(jsonData, { h1Available = false, marketState = null } = {}) {
   return new Promise((resolve, reject) => {
     if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN — Kit won't auto-analyze"); return resolve(); }
 
@@ -81,9 +81,12 @@ function wakeKit(jsonData, { h1Available = false } = {}) {
     const h1Line = h1Available
       ? "\n6. The Discord message also contains an H1 screenshot — use it for higher-timeframe context when scoring the signal"
       : "";
+    const marketStateLine = marketState && marketState.length > 0
+      ? `\n\nMarket state context (${marketState.length} snapshots today): ${JSON.stringify(marketState)}`
+      : "";
     const msg = `New trading signal: ${jsonData.direction} ${jsonData.symbol} at ${jsonData.time} (M${jsonData.timeframe}).
 
-Signal data: ${signalData}
+Signal data: ${signalData}${marketStateLine}
 
 Instructions:
 1. Check #trading channel (1475598923795136646), read the latest signal from MT4 Signals webhook
@@ -92,7 +95,7 @@ Instructions:
 4. Post your analysis to #trading using the message tool (target: 1475598923795136646). Format: SCORE (0-10), DIRECTION, SETUP TYPE, VERDICT (GO/CAUTION/SKIP), RED FLAGS, REASON, EXIT SUGGESTION
 5. After posting, append a one-line JSON log to /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0,10)}.jsonl with: {"time":"${jsonData.time}","symbol":"${jsonData.symbol}","direction":"${jsonData.direction}","score":N,"verdict":"GO|CAUTION|SKIP","setup":"type","reason":"one-line summary"}${h1Line}`;
 
-    const payload = JSON.stringify({ message: msg });
+    const payload = JSON.stringify({ sessionKey: "agent:main:hook:trading", message: msg });
 
     const hookUrl = new URL(process.env.OPENCLAW_HOOK_URL || "http://127.0.0.1:18789/hooks/agent");
     const req = http.request({
@@ -160,13 +163,15 @@ function sendMarketState(jsonData, history) {
     const symbol = jsonData.symbol || "unknown";
     const time = jsonData.time || new Date().toISOString();
 
-    const msg = `Market state update for ${symbol} at ${time}. Log this silently for context — do not post to Discord.
+    const msg = `Market state update for ${symbol} at ${time}.
 
 Current snapshot: ${JSON.stringify(jsonData)}
 
-Today's history (${history.length} snapshots): ${JSON.stringify(history)}`;
+Today's history (${history.length} snapshots): ${JSON.stringify(history)}
 
-    const payload = JSON.stringify({ message: msg });
+Instructions: Store this market state context in your working memory for use when analyzing the next signal for ${symbol}. Do not post anything to Discord and do not type in any channel.`;
+
+    const payload = JSON.stringify({ sessionKey: "agent:main:hook:trading", message: msg });
 
     const hookUrl = new URL(process.env.OPENCLAW_HOOK_URL || "http://127.0.0.1:18789/hooks/agent");
     const req = http.request({
@@ -221,8 +226,12 @@ async function processSignal(jsonPath) {
     await postToDiscord(images, jsonData);
     log(`Posted to Discord: ${jsonData.direction} ${jsonData.symbol}${h1Available ? " (M5+H1)" : " (M5 only)"}`);
 
+    // Load accumulated market state for this symbol
+    const marketState = loadHistory(jsonData.symbol);
+    verbose(`Bundling ${marketState.length} market state snapshots with signal`);
+
     // Wake Kit for analysis (non-blocking)
-    wakeKit(jsonData, { h1Available })
+    wakeKit(jsonData, { h1Available, marketState })
       .then(() => log("Kit notified for analysis"))
       .catch((err) => log("Kit wake error:", err.message));
 

@@ -17,9 +17,9 @@ MT4 (Channel Confirmed indicator)
 watcher.js (chokidar)
   │
   ├── Signals ──► Discord webhook (screenshots + summary)
-  │            └► Kit hook (scoring + analysis prompt)
+  │            └► Kit hook (scoring prompt + bundled market state history)
   │
-  └── Market state ──► Kit hook (silent context update)
+  └── Market state ──► Kit hook (context update, stored in memory)
                        + appends to daily history file
 ```
 
@@ -54,7 +54,13 @@ pm2 logs signal-watcher
 
 ## Market state history
 
-Each market state snapshot is appended to `market_state_history/SYMBOL.json` (one file per instrument). The history accumulates throughout the day and is flushed when a new day is detected. Every update sent to Kit includes both the current snapshot and the full day's history.
+Each market state snapshot is appended to `market_state_history/SYMBOL.json` (one file per instrument). The history accumulates throughout the day and is flushed when a new day is detected.
+
+Market state reaches Kit two ways:
+- **With signals** — when a signal fires, the full day's accumulated market state history for that symbol is bundled directly into the signal payload, giving Kit immediate context for analysis
+- **Standalone updates** — every 15 min, the latest snapshot + history is sent to Kit via hook (`sessionKey: agent:main:hook:trading`) for background storage
+
+All hooks use the `agent:main:hook:trading` session key for routing.
 
 ### Market state schema
 
