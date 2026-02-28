@@ -200,6 +200,133 @@ Instructions: Store this market state context in your working memory for use whe
   });
 }
 
+function postFollowupToDiscord(imagePaths, jsonData) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(DISCORD_WEBHOOK);
+    const boundary = "----FormBoundary" + Date.now();
+
+    const content = [
+      `**End-of-day follow-up for ${jsonData.symbol}**`,
+      `Time: ${jsonData.time} | Price: ${jsonData.price}`,
+      `Day High: ${jsonData.dayHigh} | Day Low: ${jsonData.dayLow} | Spread: ${jsonData.spread}`,
+      `Signals today: ${jsonData.signalsToday}`,
+    ].join("\n");
+
+    const payload = JSON.stringify({ content });
+    const parts = [Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n${payload}\r\n`, "utf-8")];
+
+    imagePaths.forEach((imgPath, i) => {
+      const imageHeader = `--${boundary}\r\nContent-Disposition: form-data; name="files[${i}]"; filename="${path.basename(imgPath)}"\r\nContent-Type: image/png\r\n\r\n`;
+      parts.push(Buffer.from(imageHeader, "utf-8"));
+      parts.push(fs.readFileSync(imgPath));
+      parts.push(Buffer.from("\r\n", "utf-8"));
+    });
+
+    parts.push(Buffer.from(`--${boundary}--\r\n`, "utf-8"));
+    const body = Buffer.concat(parts);
+
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        "Content-Length": body.length,
+      },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => res.statusCode < 300 ? resolve(data) : reject(new Error(`Discord ${res.statusCode}: ${data}`)));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function wakeKitFollowup(jsonData, { h1Available = false } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN — Kit won't review follow-up"); return resolve(); }
+
+    const h1Line = h1Available
+      ? "\n5. The Discord message also contains an H1 screenshot — use it for higher-timeframe context in your review"
+      : "";
+    const msg = `End-of-day follow-up for ${jsonData.symbol} at ${jsonData.time}.
+
+This is a review screenshot taken at market close. Signals that fired today: ${jsonData.signalsToday}
+
+Current price: ${jsonData.price} | Day High: ${jsonData.dayHigh} | Day Low: ${jsonData.dayLow}
+
+Instructions:
+1. Check #trading channel (1475598923795136646), read the latest follow-up screenshot from MT4 Signals webhook
+2. Fetch and analyze the M5 screenshot to see how price moved after today's signals
+3. Read today's signal log from /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0,10)}.jsonl
+4. For each signal that fired today, compare the verdict you gave (GO/CAUTION/SKIP) against actual price action. Post a brief review to #trading: for each signal, state whether the call was correct and what happened after entry. End with lessons learned.${h1Line}`;
+
+    const payload = JSON.stringify({ sessionKey: "agent:main:hook:trading", message: msg });
+
+    const hookUrl = new URL(process.env.OPENCLAW_HOOK_URL || "http://127.0.0.1:18789/hooks/agent");
+    const req = http.request({
+      hostname: hookUrl.hostname,
+      port: hookUrl.port,
+      path: hookUrl.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${HOOK_TOKEN}`,
+        "Content-Length": Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        res.statusCode < 300 ? resolve(data) : reject(new Error(`Hook ${res.statusCode}: ${data}`));
+      });
+    });
+    req.on("error", (err) => {
+      log("Follow-up hook failed (is SSH tunnel running?):", err.message);
+      resolve();
+    });
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function processFollowup(jsonPath) {
+  const pngPath = jsonPath.replace(/\.json$/, ".png");
+  const h1PngPath = jsonPath.replace(/\.json$/, "_H1.png");
+  log(`Follow-up: ${path.basename(jsonPath)}`);
+  try {
+    await waitForFile(pngPath);
+    const jsonData = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+
+    // Wait for H1 screenshot (soft fail)
+    let h1Available = false;
+    try {
+      verbose(`Waiting for H1 screenshot: ${path.basename(h1PngPath)}`);
+      await waitForFile(h1PngPath, 15000);
+      h1Available = true;
+      verbose("H1 screenshot found");
+    } catch {
+      log(`H1 screenshot not found (timeout) — proceeding without it`);
+    }
+
+    // Post to Discord with distinct follow-up formatting
+    const images = [pngPath];
+    if (h1Available) images.push(h1PngPath);
+    await postFollowupToDiscord(images, jsonData);
+    log(`Posted follow-up to Discord: ${jsonData.symbol} — signals: ${jsonData.signalsToday}${h1Available ? " (M5+H1)" : " (M5 only)"}`);
+
+    // Wake Kit for review (non-blocking)
+    wakeKitFollowup(jsonData, { h1Available })
+      .then(() => log("Kit notified for follow-up review"))
+      .catch((err) => log("Kit follow-up wake error:", err.message));
+
+  } catch (err) {
+    log("Follow-up error:", err.message);
+  }
+}
+
 async function processSignal(jsonPath) {
   const pngPath = jsonPath.replace(/\.json$/, ".png");
   const h1PngPath = jsonPath.replace(/\.json$/, "_H1.png");
@@ -252,6 +379,8 @@ async function handleJson(jsonPath) {
       sendMarketState(jsonData, history)
         .then(() => verbose("Market state sent to Kit"))
         .catch((err) => log("Market state error:", err.message));
+    } else if (jsonData.type === "followup") {
+      processFollowup(jsonPath);
     } else {
       processSignal(jsonPath);
     }
