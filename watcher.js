@@ -404,4 +404,100 @@ const watcher = chokidar.watch(SIGNALS_FOLDER, {
 });
 watcher.on("add", (f) => path.extname(f).toLowerCase() === ".json" && handleJson(f));
 watcher.on("change", (f) => path.extname(f).toLowerCase() === ".json" && handleJson(f));
+
+// --- EOD Follow-up Timer ---
+// Fires at 22:00 broker time. Uses market state history for closing prices.
+// No MQL4 changes needed — watcher generates follow-up data from accumulated snapshots.
+const EOD_BROKER_HOUR = 22;
+const BROKER_UTC_OFFSET = 2; // UTC+2 winter, change to 3 for summer (DST)
+let eodFiredToday = false;
+let lastEodDate = "";
+
+function getBrokerTime() {
+  const now = new Date();
+  return new Date(now.getTime() + (BROKER_UTC_OFFSET * 3600000));
+}
+
+function getTodayInstruments() {
+  const today = getBrokerTime().toISOString().slice(0, 10).replace(/-/g, "");
+  const files = fs.readdirSync(SIGNALS_FOLDER).filter(f =>
+    f.endsWith(".json") && f.includes(today) && !f.includes("_state") && !f.includes("followup")
+  );
+  const instruments = new Map();
+  for (const f of files) {
+    try {
+      const d = JSON.parse(fs.readFileSync(path.join(SIGNALS_FOLDER, f), "utf-8"));
+      if (d.type !== "market_state" && d.type !== "followup" && d.symbol) {
+        instruments.set(d.symbol, (instruments.get(d.symbol) || 0) + 1);
+      }
+    } catch {}
+  }
+  return instruments;
+}
+
+async function fireEodFollowup() {
+  const instruments = getTodayInstruments();
+  if (instruments.size === 0) {
+    log("EOD: No signals today — skipping follow-up");
+    return;
+  }
+
+  log(`EOD: Firing follow-up for ${instruments.size} instruments: ${[...instruments.keys()].join(", ")}`);
+
+  for (const [symbol, count] of instruments) {
+    const history = loadHistory(symbol);
+    const snap = history.length > 0 ? history[history.length - 1] : {};
+
+    const followupData = {
+      type: "followup",
+      symbol: symbol,
+      time: getBrokerTime().toISOString().slice(0, 19).replace("T", " "),
+      price: snap.bid || "N/A",
+      dayHigh: snap.dayHigh || "N/A",
+      dayLow: snap.dayLow || "N/A",
+      spread: snap.spread || "N/A",
+      signalsToday: count,
+    };
+
+    try {
+      await wakeKitFollowup(followupData, { h1Available: false });
+      log(`EOD: Kit notified for ${symbol} (${count} signals, close: ${followupData.price})`);
+    } catch (err) {
+      log(`EOD: Failed for ${symbol}: ${err.message}`);
+    }
+
+    // Small delay between instruments
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  log("EOD: All follow-ups sent");
+}
+
+setInterval(() => {
+  const b = getBrokerTime();
+  const bd = b.toISOString().slice(0, 10);
+
+  // Reset flag at midnight broker time
+  if (bd !== lastEodDate) {
+    eodFiredToday = false;
+    lastEodDate = bd;
+  }
+
+  // Fire at 22:00 broker time
+  if (b.getUTCHours() === EOD_BROKER_HOUR && b.getUTCMinutes() === 0 && !eodFiredToday) {
+    // Skip weekends (Saturday=6, Sunday=0)
+    const dow = b.getUTCDay();
+    if (dow === 0 || dow === 6) {
+      eodFiredToday = true;
+      verbose("EOD: Weekend — skipping");
+      return;
+    }
+
+    eodFiredToday = true;
+    log("EOD: 22:00 broker time — firing end-of-day review");
+    fireEodFollowup().catch(err => log("EOD error:", err.message));
+  }
+}, 60000); // Check every 60 seconds
+
+log("EOD follow-up timer armed (22:00 broker, UTC+" + BROKER_UTC_OFFSET + ")");
 log("Watcher started. Signals → Discord + Kit analysis");
