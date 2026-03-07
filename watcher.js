@@ -93,7 +93,8 @@ Instructions:
 2. Fetch and analyze the attached M5 screenshot
 3. Read the scoring methodology from /home/manu/.openclaw/workspace/memory/trading/scoring-system.txt
 4. Post your analysis to #trading using the message tool (target: 1475598923795136646). Format: SCORE (0-10), DIRECTION, SETUP TYPE, VERDICT (GO/CAUTION/SKIP), RED FLAGS, REASON, EXIT SUGGESTION
-5. After posting, append a one-line JSON log to /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0,10)}.jsonl with: {"time":"${jsonData.time}","symbol":"${jsonData.symbol}","direction":"${jsonData.direction}","score":N,"verdict":"GO|CAUTION|SKIP","setup":"type","reason":"one-line summary"}${h1Line}`;
+5. After posting, log the signal to SQLite: sqlite3 /home/manu/.openclaw/workspace/memory/trading/signals.db "INSERT INTO signals (timestamp, instrument, direction, score, verdict, setup_type, entry_price, atr, bar_size_atr, entry_ratio, swing_ratio, red_flags) VALUES ('YYYY-MM-DD HH:MM', 'SYMBOL', 'DIR', SCORE, 'VERDICT', 'SETUP', PRICE, ATR, BSATR, ER, SR, 'flags')"
+6. Update the Google Sheet (ID: 1D9kG6-mkB67V6JxIuQHZ0q-myzD8lwWFpr8PT-Iwe84) — append a row to the instrument's tab (GER40/XAUUSD/NAS100/BTCUSD) with: Date, Time, Direction, Score, Verdict, Setup Type, Entry Price, ATR, BarSize/ATR, Entry Ratio, Swing Ratio, Red Flags. Use GOOGLE_APPLICATION_CREDENTIALS=/home/manu/.openclaw/credentials/google/drive-reader-key.json${h1Line}`;
 
     const payload = JSON.stringify({ sessionKey: "agent:main:hook:trading", message: msg });
 
@@ -376,9 +377,8 @@ async function handleJson(jsonPath) {
       verbose(`Market state file detected: ${path.basename(jsonPath)}`);
       const history = appendHistory(jsonData);
       log(`Market state: ${jsonData.symbol} — ${history.length} snapshots today`);
-      sendMarketState(jsonData, history)
-        .then(() => verbose("Market state sent to Kit"))
-        .catch((err) => log("Market state error:", err.message));
+      // Market state is bundled into signal payloads via loadHistory() — no standalone hook needed
+      // This eliminates ghost "typing" indicators and saves tokens
     } else if (jsonData.type === "followup") {
       processFollowup(jsonPath);
     } else {
@@ -409,13 +409,33 @@ watcher.on("change", (f) => path.extname(f).toLowerCase() === ".json" && handleJ
 // Fires at 22:00 broker time. Uses market state history for closing prices.
 // No MQL4 changes needed — watcher generates follow-up data from accumulated snapshots.
 const EOD_BROKER_HOUR = 22;
-const BROKER_UTC_OFFSET = 2; // UTC+2 winter, change to 3 for summer (DST)
 let eodFiredToday = false;
 let lastEodDate = "";
 
+function getBrokerUtcOffset() {
+  // Most MT4 brokers use EET/EEST (Eastern European Time)
+  // UTC+2 in winter (last Sunday of October → last Sunday of March)
+  // UTC+3 in summer (last Sunday of March → last Sunday of October)
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth(); // 0-indexed
+
+  // Find last Sunday of March (month 2) and last Sunday of October (month 9)
+  const lastSunMar = new Date(Date.UTC(year, 2, 31));
+  lastSunMar.setUTCDate(31 - lastSunMar.getUTCDay());
+  const lastSunOct = new Date(Date.UTC(year, 9, 31));
+  lastSunOct.setUTCDate(31 - lastSunOct.getUTCDay());
+
+  // DST switches at 01:00 UTC on the last Sunday
+  const dstStart = new Date(Date.UTC(year, 2, lastSunMar.getUTCDate(), 1, 0, 0));
+  const dstEnd = new Date(Date.UTC(year, 9, lastSunOct.getUTCDate(), 1, 0, 0));
+
+  return (now >= dstStart && now < dstEnd) ? 3 : 2;
+}
+
 function getBrokerTime() {
   const now = new Date();
-  return new Date(now.getTime() + (BROKER_UTC_OFFSET * 3600000));
+  return new Date(now.getTime() + (getBrokerUtcOffset() * 3600000));
 }
 
 function getTodayInstruments() {
@@ -499,5 +519,5 @@ setInterval(() => {
   }
 }, 60000); // Check every 60 seconds
 
-log("EOD follow-up timer armed (22:00 broker, UTC+" + BROKER_UTC_OFFSET + ")");
+log("EOD follow-up timer armed (22:00 broker, currently UTC+" + getBrokerUtcOffset() + ", auto-DST)");
 log("Watcher started. Signals → Discord + Kit analysis");
