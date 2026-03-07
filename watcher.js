@@ -259,10 +259,12 @@ This is a review screenshot taken at market close. Signals that fired today: ${j
 Current price: ${jsonData.price} | Day High: ${jsonData.dayHigh} | Day Low: ${jsonData.dayLow}
 
 Instructions:
-1. Check #trading channel (1475598923795136646), read the latest follow-up screenshot from MT4 Signals webhook
-2. Fetch and analyze the M5 screenshot to see how price moved after today's signals
-3. Read today's signal log from /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0,10)}.jsonl
-4. For each signal that fired today, compare the verdict you gave (GO/CAUTION/SKIP) against actual price action. Post a brief review to #trading: for each signal, state whether the call was correct and what happened after entry. End with lessons learned.${h1Line}`;
+1. Check #trading channel (1475598923795136646), read the latest signals from today
+2. Query SQLite: sqlite3 /home/manu/.openclaw/workspace/memory/trading/signals.db "SELECT * FROM signals WHERE timestamp LIKE 'YYYY-MM-DD%' AND instrument='${jsonData.symbol.replace('.r','')}' ORDER BY timestamp"
+3. For each signal, compare your verdict (GO/CAUTION/SKIP) against actual price action using the close price (${jsonData.price}). Was the call correct?
+4. Post a detailed review to #trading for this instrument. Format: Day stats (high/low/close/range), then each signal reviewed with verdict assessment, then lessons learned.
+5. Update SQLite: UPDATE signals SET price_at_close=CLOSE, outcome='CORRECT SKIP|MISSED|WRONG GO|etc', post_analysis='what happened' WHERE timestamp='...' AND instrument='...'
+6. Update Google Sheet "EOD Reviews" tab (ID: 1D9kG6-mkB67V6JxIuQHZ0q-myzD8lwWFpr8PT-Iwe84): append one row with Date, Instrument, Day High, Day Low, Close, Range, total signals, reviewed count, correct count, missed count, wrong count, accuracy %, and your full EOD analysis text in column M. Use GOOGLE_APPLICATION_CREDENTIALS=/home/manu/.openclaw/credentials/google/drive-reader-key.json${h1Line}`;
 
     const payload = JSON.stringify({ sessionKey: "agent:main:hook:trading", message: msg });
 
