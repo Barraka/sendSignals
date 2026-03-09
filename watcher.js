@@ -10,6 +10,7 @@ const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
 const HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN;
 const VERBOSE = process.argv.includes("--verbose");
 const HISTORY_DIR = path.join(__dirname, "market_state_history");
+const SCREENSHOTS_DIR = path.join(__dirname, "screenshots"); // Persistent local storage
 
 function log(...args) { console.log(`[${new Date().toISOString()}]`, ...args); }
 function verbose(...args) { if (VERBOSE) log("[VERBOSE]", ...args); }
@@ -24,6 +25,18 @@ function waitForFile(filePath, maxWait = 5000) {
     };
     check();
   });
+}
+
+function saveScreenshotLocally(srcPath, filename) {
+  try {
+    const destPath = path.join(SCREENSHOTS_DIR, filename);
+    fs.copyFileSync(srcPath, destPath);
+    verbose(`Saved screenshot locally: ${filename}`);
+    return destPath;
+  } catch (err) {
+    log("Error saving screenshot locally:", err.message);
+    return null;
+  }
 }
 
 function postToDiscord(imagePaths, jsonData) {
@@ -73,28 +86,31 @@ function postToDiscord(imagePaths, jsonData) {
   });
 }
 
-function wakeKit(jsonData, { h1Available = false, marketState = null } = {}) {
+function wakeKit(jsonData, { h1Available = false, marketState = null, localScreenshots = {} } = {}) {
   return new Promise((resolve, reject) => {
     if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN — Kit won't auto-analyze"); return resolve(); }
 
     const signalData = JSON.stringify(jsonData);
-    const h1Line = h1Available
-      ? "\n6. The Discord message also contains an H1 screenshot — use it for higher-timeframe context when scoring the signal"
+    const h1Line = h1Available && localScreenshots.h1
+      ? `\n6. H1 screenshot available at: ${localScreenshots.h1} — use it for higher-timeframe context when scoring the signal`
+      : "";
+    const m5ScreenshotLine = localScreenshots.m5
+      ? `\nM5 screenshot: ${localScreenshots.m5}`
       : "";
     const marketStateLine = marketState && marketState.length > 0
       ? `\n\nMarket state context (${marketState.length} snapshots today): ${JSON.stringify(marketState)}`
       : "";
     const msg = `New trading signal: ${jsonData.direction} ${jsonData.symbol} at ${jsonData.time} (M${jsonData.timeframe}).
 
-Signal data: ${signalData}${marketStateLine}
+Signal data: ${signalData}${m5ScreenshotLine}${h1Line}${marketStateLine}
 
 Instructions:
 1. Check #trading channel (1475598923795136646), read the latest signal from MT4 Signals webhook
-2. Fetch and analyze the attached M5 screenshot
+2. Analyze the M5 screenshot from the local path provided above (not Discord CDN — the CDN link expires quickly, so local paths are used instead)
 3. Read the scoring methodology from /home/manu/.openclaw/workspace/memory/trading/scoring-system.txt
 4. Post your analysis to #trading using the message tool (target: 1475598923795136646). Format: SCORE (0-10), DIRECTION, SETUP TYPE, VERDICT (GO/CAUTION/SKIP), RED FLAGS, REASON, EXIT SUGGESTION
 5. After posting, log the signal to SQLite: sqlite3 /home/manu/.openclaw/workspace/memory/trading/signals.db "INSERT INTO signals (timestamp, instrument, direction, score, verdict, setup_type, entry_price, atr, bar_size_atr, entry_ratio, swing_ratio, red_flags) VALUES ('YYYY-MM-DD HH:MM', 'SYMBOL', 'DIR', SCORE, 'VERDICT', 'SETUP', PRICE, ATR, BSATR, ER, SR, 'flags')"
-6. Update the Google Sheet (ID: 1D9kG6-mkB67V6JxIuQHZ0q-myzD8lwWFpr8PT-Iwe84) — append a row to the instrument's tab (GER40/XAUUSD/NAS100/BTCUSD) with: Date, Time, Direction, Score, Verdict, Setup Type, Entry Price, ATR, BarSize/ATR, Entry Ratio, Swing Ratio, Red Flags. Use GOOGLE_APPLICATION_CREDENTIALS=/home/manu/.openclaw/credentials/google/drive-reader-key.json${h1Line}`;
+6. Update the Google Sheet (ID: 1D9kG6-mkB67V6JxIuQHZ0q-myzD8lwWFpr8PT-Iwe84) — append a row to the instrument's tab (GER40/XAUUSD/NAS100/BTCUSD) with: Date, Time, Direction, Score, Verdict, Setup Type, Entry Price, ATR, BarSize/ATR, Entry Ratio, Swing Ratio, Red Flags. Use GOOGLE_APPLICATION_CREDENTIALS=/home/manu/.openclaw/credentials/google/drive-reader-key.json`;
 
     const payload = JSON.stringify({ sessionKey: "agent:main:hook:trading", message: msg });
 
@@ -245,14 +261,17 @@ function postFollowupToDiscord(imagePaths, jsonData) {
   });
 }
 
-function wakeKitFollowup(jsonData, { h1Available = false } = {}) {
+function wakeKitFollowup(jsonData, { h1Available = false, localScreenshots = {} } = {}) {
   return new Promise((resolve, reject) => {
     if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN — Kit won't review follow-up"); return resolve(); }
 
-    const h1Line = h1Available
-      ? "\n5. The Discord message also contains an H1 screenshot — use it for higher-timeframe context in your review"
+    const h1Line = h1Available && localScreenshots.h1
+      ? `\n5. H1 screenshot available at: ${localScreenshots.h1} — use it for higher-timeframe context in your review`
       : "";
-    const msg = `End-of-day follow-up for ${jsonData.symbol} at ${jsonData.time}.
+    const m5ScreenshotLine = localScreenshots.m5
+      ? `\nM5 screenshot: ${localScreenshots.m5}`
+      : "";
+    const msg = `End-of-day follow-up for ${jsonData.symbol} at ${jsonData.time}.${m5ScreenshotLine}${h1Line}
 
 This is a review screenshot taken at market close. Signals that fired today: ${jsonData.signalsToday}
 
@@ -314,14 +333,27 @@ async function processFollowup(jsonPath) {
       log(`H1 screenshot not found (timeout) — proceeding without it`);
     }
 
+    // Save screenshots locally BEFORE uploading to Discord
+    const m5LocalPath = saveScreenshotLocally(pngPath, path.basename(pngPath));
+    let h1LocalPath = null;
+    if (h1Available) {
+      h1LocalPath = saveScreenshotLocally(h1PngPath, path.basename(h1PngPath));
+    }
+
     // Post to Discord with distinct follow-up formatting
     const images = [pngPath];
     if (h1Available) images.push(h1PngPath);
     await postFollowupToDiscord(images, jsonData);
     log(`Posted follow-up to Discord: ${jsonData.symbol} — signals: ${jsonData.signalsToday}${h1Available ? " (M5+H1)" : " (M5 only)"}`);
 
-    // Wake Kit for review (non-blocking)
-    wakeKitFollowup(jsonData, { h1Available })
+    // Wake Kit for review with local screenshot paths (non-blocking)
+    wakeKitFollowup(jsonData, { 
+      h1Available,
+      localScreenshots: {
+        m5: m5LocalPath,
+        h1: h1LocalPath
+      }
+    })
       .then(() => log("Kit notified for follow-up review"))
       .catch((err) => log("Kit follow-up wake error:", err.message));
 
@@ -350,6 +382,13 @@ async function processSignal(jsonPath) {
       log(`H1 screenshot not found (timeout) — proceeding without it`);
     }
 
+    // Save screenshots locally BEFORE uploading to Discord (persistent reference for Kit)
+    const m5LocalPath = saveScreenshotLocally(pngPath, path.basename(pngPath));
+    let h1LocalPath = null;
+    if (h1Available) {
+      h1LocalPath = saveScreenshotLocally(h1PngPath, path.basename(h1PngPath));
+    }
+
     // Post to Discord with available screenshots
     const images = [pngPath];
     if (h1Available) images.push(h1PngPath);
@@ -360,8 +399,15 @@ async function processSignal(jsonPath) {
     const marketState = loadHistory(jsonData.symbol);
     verbose(`Bundling ${marketState.length} market state snapshots with signal`);
 
-    // Wake Kit for analysis (non-blocking)
-    wakeKit(jsonData, { h1Available, marketState })
+    // Wake Kit for analysis with local screenshot paths (non-blocking)
+    wakeKit(jsonData, { 
+      h1Available, 
+      marketState,
+      localScreenshots: {
+        m5: m5LocalPath,
+        h1: h1LocalPath
+      }
+    })
       .then(() => log("Kit notified for analysis"))
       .catch((err) => log("Kit wake error:", err.message));
 
@@ -397,8 +443,10 @@ if (!SIGNALS_FOLDER || !DISCORD_WEBHOOK) {
 }
 if (!fs.existsSync(SIGNALS_FOLDER)) fs.mkdirSync(SIGNALS_FOLDER, { recursive: true });
 if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
+if (!fs.existsSync(SCREENSHOTS_DIR)) fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 log(`Watching: ${SIGNALS_FOLDER}`);
+log(`Screenshots (persistent): ${SCREENSHOTS_DIR}`);
 log(`Kit hook: ${HOOK_TOKEN ? "enabled (needs SSH tunnel)" : "disabled"}`);
 const watcher = chokidar.watch(SIGNALS_FOLDER, {
   ignoreInitial: true,
