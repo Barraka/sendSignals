@@ -10,7 +10,9 @@ const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
 const HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN;
 const VERBOSE = process.argv.includes("--verbose");
 const HISTORY_DIR = path.join(__dirname, "market_state_history");
-const SCREENSHOTS_DIR = path.join(__dirname, "screenshots"); // Persistent local storage
+const SCREENSHOTS_DIR = path.join(__dirname, "screenshots"); // Local VPS storage
+const REMOTE_SCREENSHOTS_DIR = process.env.REMOTE_SCREENSHOTS_DIR || "/home/manu/.openclaw/workspace/memory/trading/signals/screenshots";
+const { exec } = require("child_process");
 
 function log(...args) { console.log(`[${new Date().toISOString()}]`, ...args); }
 function verbose(...args) { if (VERBOSE) log("[VERBOSE]", ...args); }
@@ -32,11 +34,43 @@ function saveScreenshotLocally(srcPath, filename) {
     const destPath = path.join(SCREENSHOTS_DIR, filename);
     fs.copyFileSync(srcPath, destPath);
     verbose(`Saved screenshot locally: ${filename}`);
+    
+    // Also upload to Pi via SSH/SCP for Kit to analyze
+    uploadScreenshotToRemote(srcPath, filename);
+    
     return destPath;
   } catch (err) {
     log("Error saving screenshot locally:", err.message);
     return null;
   }
+}
+
+function uploadScreenshotToRemote(srcPath, filename) {
+  // Non-blocking upload to Pi. If SSH credentials are not configured, silently skip.
+  // This uses sshpass + scp (must be available on VPS) or SSH agent forwarding.
+  
+  const remoteUser = process.env.REMOTE_USER || "manu";
+  const remoteHost = process.env.REMOTE_HOST || "192.168.1.98"; // Pi IP
+  const remotePass = process.env.REMOTE_PASS; // Optional; uses SSH key if not set
+  const remotePath = REMOTE_SCREENSHOTS_DIR;
+  
+  if (!remoteHost) {
+    verbose("REMOTE_HOST not set — skipping remote upload");
+    return;
+  }
+  
+  const destUrl = `${remoteUser}@${remoteHost}:${remotePath}/${filename}`;
+  const cmd = remotePass
+    ? `sshpass -p "${remotePass}" scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`
+    : `scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`;
+  
+  exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
+    if (err) {
+      log(`Remote upload warning (${filename}): ${err.message}`);
+    } else {
+      verbose(`Uploaded to Pi: ${filename}`);
+    }
+  });
 }
 
 function postToDiscord(imagePaths, jsonData) {
@@ -333,11 +367,13 @@ async function processFollowup(jsonPath) {
       log(`H1 screenshot not found (timeout) — proceeding without it`);
     }
 
-    // Save screenshots locally BEFORE uploading to Discord
-    const m5LocalPath = saveScreenshotLocally(pngPath, path.basename(pngPath));
-    let h1LocalPath = null;
+    // Save screenshots locally AND upload to Pi via SCP
+    const m5Filename = path.basename(pngPath);
+    saveScreenshotLocally(pngPath, m5Filename);
+    let h1Filename = null;
     if (h1Available) {
-      h1LocalPath = saveScreenshotLocally(h1PngPath, path.basename(h1PngPath));
+      h1Filename = path.basename(h1PngPath);
+      saveScreenshotLocally(h1PngPath, h1Filename);
     }
 
     // Post to Discord with distinct follow-up formatting
@@ -346,16 +382,21 @@ async function processFollowup(jsonPath) {
     await postFollowupToDiscord(images, jsonData);
     log(`Posted follow-up to Discord: ${jsonData.symbol} — signals: ${jsonData.signalsToday}${h1Available ? " (M5+H1)" : " (M5 only)"}`);
 
-    // Wake Kit for review with local screenshot paths (non-blocking)
-    wakeKitFollowup(jsonData, { 
-      h1Available,
-      localScreenshots: {
-        m5: m5LocalPath,
-        h1: h1LocalPath
-      }
-    })
-      .then(() => log("Kit notified for follow-up review"))
-      .catch((err) => log("Kit follow-up wake error:", err.message));
+    // Wake Kit for review with Pi-accessible paths (non-blocking)
+    setTimeout(() => {
+      const m5RemotePath = `${REMOTE_SCREENSHOTS_DIR}/${m5Filename}`;
+      const h1RemotePath = h1Filename ? `${REMOTE_SCREENSHOTS_DIR}/${h1Filename}` : null;
+      
+      wakeKitFollowup(jsonData, { 
+        h1Available,
+        localScreenshots: {
+          m5: m5RemotePath,
+          h1: h1RemotePath
+        }
+      })
+        .then(() => log("Kit notified for follow-up review"))
+        .catch((err) => log("Kit follow-up wake error:", err.message));
+    }, 1500);
 
   } catch (err) {
     log("Follow-up error:", err.message);
@@ -383,10 +424,13 @@ async function processSignal(jsonPath) {
     }
 
     // Save screenshots locally BEFORE uploading to Discord (persistent reference for Kit)
-    const m5LocalPath = saveScreenshotLocally(pngPath, path.basename(pngPath));
-    let h1LocalPath = null;
+    // Also uploads to Pi via SCP for Kit to analyze
+    const m5Filename = path.basename(pngPath);
+    saveScreenshotLocally(pngPath, m5Filename);
+    let h1Filename = null;
     if (h1Available) {
-      h1LocalPath = saveScreenshotLocally(h1PngPath, path.basename(h1PngPath));
+      h1Filename = path.basename(h1PngPath);
+      saveScreenshotLocally(h1PngPath, h1Filename);
     }
 
     // Post to Discord with available screenshots
@@ -399,17 +443,23 @@ async function processSignal(jsonPath) {
     const marketState = loadHistory(jsonData.symbol);
     verbose(`Bundling ${marketState.length} market state snapshots with signal`);
 
-    // Wake Kit for analysis with local screenshot paths (non-blocking)
-    wakeKit(jsonData, { 
-      h1Available, 
-      marketState,
-      localScreenshots: {
-        m5: m5LocalPath,
-        h1: h1LocalPath
-      }
-    })
-      .then(() => log("Kit notified for analysis"))
-      .catch((err) => log("Kit wake error:", err.message));
+    // Wake Kit for analysis with Pi-accessible remote screenshot paths (non-blocking)
+    // Give it time to upload (soft wait via brief timeout)
+    setTimeout(() => {
+      const m5RemotePath = h1Available ? `${REMOTE_SCREENSHOTS_DIR}/${m5Filename}` : null;
+      const h1RemotePath = h1Filename ? `${REMOTE_SCREENSHOTS_DIR}/${h1Filename}` : null;
+      
+      wakeKit(jsonData, { 
+        h1Available, 
+        marketState,
+        localScreenshots: {
+          m5: m5RemotePath,
+          h1: h1RemotePath
+        }
+      })
+        .then(() => log("Kit notified for analysis"))
+        .catch((err) => log("Kit wake error:", err.message));
+    }, 1500); // Allow 1.5s for SCP to initiate
 
   } catch (err) {
     log("Error:", err.message);
