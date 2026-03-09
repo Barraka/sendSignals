@@ -33,9 +33,15 @@ function saveScreenshotLocally(srcPath, filename) {
   try {
     const destPath = path.join(SCREENSHOTS_DIR, filename);
     fs.copyFileSync(srcPath, destPath);
-    verbose(`Saved screenshot locally: ${filename}`);
     
-    // Also upload to Pi via SSH/SCP for Kit to analyze
+    // Extract instrument for logging: "GER40.r_SHORT_20260309211020_M5.png" → "GER40.r"
+    const instrumentMatch = filename.match(/^([A-Z0-9.]+)_/);
+    const instrument = instrumentMatch ? instrumentMatch[1] : "unknown";
+    const timeframe = filename.includes("_H1") ? "H1" : "M5";
+    
+    log(`[${instrument}] Saved ${timeframe} screenshot locally: ${filename}`);
+    
+    // Also upload to Pi via SSH/SCP for Kit to analyze (non-blocking)
     uploadScreenshotToRemote(srcPath, filename);
     
     return destPath;
@@ -47,11 +53,11 @@ function saveScreenshotLocally(srcPath, filename) {
 
 function uploadScreenshotToRemote(srcPath, filename) {
   // Non-blocking upload to Pi. If SSH credentials are not configured, silently skip.
-  // This uses sshpass + scp (must be available on VPS) or SSH agent forwarding.
+  // This uses SSH key auth over Tailscale VPN (or sshpass with password if configured).
   
   const remoteUser = process.env.REMOTE_USER || "manu";
-  const remoteHost = process.env.REMOTE_HOST || "192.168.1.98"; // Pi IP
-  const remotePass = process.env.REMOTE_PASS; // Optional; uses SSH key if not set
+  const remoteHost = process.env.REMOTE_HOST || "100.90.146.47"; // Tailscale Pi IP (was 192.168.1.98 private)
+  const remotePass = process.env.REMOTE_PASS; // Optional; SSH key auth preferred
   const remotePath = REMOTE_SCREENSHOTS_DIR;
   
   if (!remoteHost) {
@@ -65,19 +71,22 @@ function uploadScreenshotToRemote(srcPath, filename) {
     return;
   }
   
-  // Windows OpenSSH handles paths correctly; just ensure proper quoting
-  // Remote path uses forward slashes (Linux convention on Pi)
+  // Extract instrument from filename for logging: "GER40.r_SHORT_20260309211020_M5.png" → "GER40.r"
+  const instrumentMatch = filename.match(/^([A-Z0-9.]+)_/);
+  const instrument = instrumentMatch ? instrumentMatch[1] : "unknown";
+  
+  // Use Tailscale IP (100.90.146.47), not private IP (192.168.1.98)
   const destUrl = `${remoteUser}@${remoteHost}:${remotePath}/${filename}`;
   const cmd = remotePass
     ? `sshpass -p "${remotePass}" scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`
-    : `scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`;
+    : `scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`; // Uses SSH key auth
   
-  verbose(`Uploading via SCP: ${filename} → ${destUrl}`);
+  log(`[${instrument}] Uploading ${filename.split('_')[1]} screenshot to Pi...`);
   exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
     if (err) {
-      log(`Remote upload failed (${filename}): ${err.message}${stderr ? ` — stderr: ${stderr.slice(0, 200)}` : ""}`);
+      log(`[${instrument}] Remote upload FAILED: ${err.message}${stderr ? ` — ${stderr.slice(0, 200)}` : ""}`);
     } else {
-      verbose(`Uploaded to Pi: ${filename}`);
+      log(`[${instrument}] ✅ Uploaded: ${filename}`);
     }
   });
 }
@@ -377,11 +386,16 @@ async function processFollowup(jsonPath) {
     }
 
     // Save screenshots locally AND upload to Pi via SCP
-    const m5Filename = path.basename(pngPath);
+    // Use unique filenames: include instrument + timestamp to prevent same-second collisions
+    const symbol = jsonData.symbol || "unknown";
+    const time = (jsonData.time || "").replace(/[:\s]/g, ""); // "2026.03.09 20:30:00" → "20260309203000"
+    const m5Filename = `${symbol}_EOD_${time}_M5.png`;
+    const h1Filename_temp = `${symbol}_EOD_${time}_H1.png`;
+    
     saveScreenshotLocally(pngPath, m5Filename);
     let h1Filename = null;
     if (h1Available) {
-      h1Filename = path.basename(h1PngPath);
+      h1Filename = h1Filename_temp;
       saveScreenshotLocally(h1PngPath, h1Filename);
     }
 
@@ -434,11 +448,17 @@ async function processSignal(jsonPath) {
 
     // Save screenshots locally BEFORE uploading to Discord (persistent reference for Kit)
     // Also uploads to Pi via SCP for Kit to analyze
-    const m5Filename = path.basename(pngPath);
+    // Use unique filenames: include instrument + direction + timestamp to prevent same-second collisions
+    const symbol = jsonData.symbol || "unknown";
+    const direction = jsonData.direction || "unknown";
+    const time = (jsonData.time || "").replace(/[:\s]/g, ""); // "2026.03.09 21:20:30" → "20260309212030"
+    const m5Filename = `${symbol}_${direction}_${time}_M5.png`;
+    const h1Filename_temp = `${symbol}_${direction}_${time}_H1.png`;
+    
     saveScreenshotLocally(pngPath, m5Filename);
     let h1Filename = null;
     if (h1Available) {
-      h1Filename = path.basename(h1PngPath);
+      h1Filename = h1Filename_temp;
       saveScreenshotLocally(h1PngPath, h1Filename);
     }
 
