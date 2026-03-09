@@ -59,14 +59,23 @@ function uploadScreenshotToRemote(srcPath, filename) {
     return;
   }
   
+  // Verify source file exists before attempting upload
+  if (!fs.existsSync(srcPath)) {
+    log(`Remote upload skipped (${filename}): source file not found at ${srcPath}`);
+    return;
+  }
+  
+  // Windows OpenSSH handles paths correctly; just ensure proper quoting
+  // Remote path uses forward slashes (Linux convention on Pi)
   const destUrl = `${remoteUser}@${remoteHost}:${remotePath}/${filename}`;
   const cmd = remotePass
     ? `sshpass -p "${remotePass}" scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`
     : `scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${srcPath}" "${destUrl}"`;
   
+  verbose(`Uploading via SCP: ${filename} → ${destUrl}`);
   exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
     if (err) {
-      log(`Remote upload warning (${filename}): ${err.message}`);
+      log(`Remote upload failed (${filename}): ${err.message}${stderr ? ` — stderr: ${stderr.slice(0, 200)}` : ""}`);
     } else {
       verbose(`Uploaded to Pi: ${filename}`);
     }
@@ -494,6 +503,13 @@ if (!SIGNALS_FOLDER || !DISCORD_WEBHOOK) {
 if (!fs.existsSync(SIGNALS_FOLDER)) fs.mkdirSync(SIGNALS_FOLDER, { recursive: true });
 if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
 if (!fs.existsSync(SCREENSHOTS_DIR)) fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+
+// Validate remote upload configuration
+const remoteHost = process.env.REMOTE_HOST;
+const remotePass = process.env.REMOTE_PASS;
+if (remoteHost && !remotePass) {
+  log("⚠️  REMOTE_HOST set but REMOTE_PASS not configured — screenshot uploads will skip (install SSH keys or set REMOTE_PASS in .env)");
+}
 
 log(`Watching: ${SIGNALS_FOLDER}`);
 log(`Screenshots (persistent): ${SCREENSHOTS_DIR}`);
