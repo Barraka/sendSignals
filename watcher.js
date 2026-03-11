@@ -1,5 +1,5 @@
 /**
- * watcher.js v3 ƒ?" Signal Watcher + Position Manager + Market State + EOD
+ * watcher.js v3  -  Signal Watcher + Position Manager + Market State + EOD
  *
  * Merged from VPS v2 (position management) and Pi version (market state, followup, EOD).
  *
@@ -82,12 +82,12 @@ function uploadScreenshot(localPath) {
 
   // Queue SCP upload to Pi
   if (!REMOTE_HOST || !REMOTE_USER) {
-    log(`WARNING: SCP upload skipped for ${filename} ƒ?" REMOTE_HOST/REMOTE_USER not set`);
+    log(`WARNING: SCP upload skipped for ${filename}  -  REMOTE_HOST/REMOTE_USER not set`);
     return;
   }
 
   if (!fs.existsSync(localPath)) {
-    log(`WARNING: SCP upload skipped for ${filename} ƒ?" source file not found`);
+    log(`WARNING: SCP upload skipped for ${filename}  -  source file not found`);
     return;
   }
 
@@ -108,7 +108,7 @@ function scpUpload(item) {
   const { path: localPath, filename, attempt } = item;
 
   if (!fs.existsSync(localPath)) {
-    log(`WARNING: SCP retry skipped for ${filename} ƒ?" local file gone`);
+    log(`WARNING: SCP retry skipped for ${filename}  -  local file gone`);
     uploadRunning = false;
     drainUploadQueue();
     return;
@@ -119,7 +119,7 @@ function scpUpload(item) {
     if (err) {
       if (attempt < SCP_MAX_RETRIES) {
         const delay = SCP_RETRY_DELAYS[attempt] || 45000;
-        log(`SCP upload FAILED for ${filename} (attempt ${attempt + 1}/${SCP_MAX_RETRIES + 1}): ${stderr || err.message} ƒ?" retrying in ${delay / 1000}s`);
+        log(`SCP upload FAILED for ${filename} (attempt ${attempt + 1}/${SCP_MAX_RETRIES + 1}): ${stderr || err.message}  -  retrying in ${delay / 1000}s`);
         setTimeout(() => {
           scpUpload({ path: localPath, filename, attempt: attempt + 1 });
         }, delay);
@@ -158,7 +158,7 @@ function appendHistory(snapshot) {
   if (history.length > 0) {
     const lastDay = (history[0].time || "").slice(0, 10);
     if (lastDay !== today) {
-      verbose(`New day detected for ${symbol} ƒ?" flushing history`);
+      verbose(`New day detected for ${symbol}  -  flushing history`);
       history = [];
     }
   }
@@ -179,8 +179,8 @@ function postToDiscord(imagePaths, jsonData) {
       `**ÐY"S Signal: ${jsonData.direction} ${jsonData.symbol}**`,
       `Time: ${jsonData.time} | TF: M${jsonData.timeframe}`,
       `Bid: ${jsonData.bid} | Spread: ${jsonData.spread}`,
-      `Bar ƒ?" O: ${jsonData.open} H: ${jsonData.high} L: ${jsonData.low} C: ${jsonData.close}`,
-      `Channel ƒ?" Upper: ${jsonData.upperChannel} Lower: ${jsonData.lowerChannel} Dir: ${jsonData.channelDirection > 0 ? "BULL" : "BEAR"}`,
+      `Bar  -  O: ${jsonData.open} H: ${jsonData.high} L: ${jsonData.low} C: ${jsonData.close}`,
+      `Channel  -  Upper: ${jsonData.upperChannel} Lower: ${jsonData.lowerChannel} Dir: ${jsonData.channelDirection > 0 ? "BULL" : "BEAR"}`,
       `ATR: ${jsonData.atr} | BarSize/ATR: ${jsonData.barSizeATR}`,
       `Entry Ratio: ${jsonData.entryRatio} | Swing Ratio: ${jsonData.swingRatio}`,
     ].join("\n");
@@ -265,7 +265,7 @@ function postFollowupToDiscord(imagePaths, jsonData) {
 
 function sendHook(message, sessionKey) {
   return new Promise((resolve, reject) => {
-    if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN ƒ?" skipping"); return resolve(); }
+    if (!HOOK_TOKEN) { log("No OPENCLAW_HOOK_TOKEN  -  skipping"); return resolve(); }
 
     const body = { message };
     if (sessionKey) body.sessionKey = sessionKey;
@@ -313,14 +313,12 @@ function wakeKitForSignal(jsonData, { h1Available = false, marketState = null, s
 
 Signal data: ${signalData}${m5Line}${h1Line}${marketStateLine}
 
-Instructions:
-1. Analyze the screenshots using the image tool (paths above). If not yet available, check #trading channel (1475598923795136646) for the Discord-posted screenshot
-2. Read the scoring methodology from /home/manu/.openclaw/workspace/reference/trading/scoring-system.txt
-3. Post your analysis to #trading using the message tool (target: 1475598923795136646). Format: SCORE (0-10), DIRECTION, SETUP TYPE, VERDICT (GO/CAUTION/SKIP), RED FLAGS, REASON, EXIT SUGGESTION
-4. After posting, log the signal TWO ways:
-   a) Append to /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0, 10)}.jsonl: {"time":"${jsonData.time}","symbol":"${jsonData.symbol}","direction":"${jsonData.direction}","score":N,"verdict":"GO|CAUTION|SKIP","setup":"type","reason":"one-line summary"}
-   b) INSERT into SQLite DB at /home/manu/.openclaw/workspace/memory/trading/signals/signals.db table 'signals': (timestamp, instrument, direction, score, verdict, setup, entry_price, bar_size_atr, entry_ratio, swing_ratio, channel_direction, atr, spread, red_flags, screenshot_m5, screenshot_h1). Use the signal data for raw fields and your analysis for score/verdict/setup/red_flags.${screenshotPaths.m5 ? ` Use these screenshot paths: screenshot_m5="${screenshotPaths.m5}", screenshot_h1="${screenshotPaths.h1 || ""}".` : ""}
-5. Update the Google Sheet (ID: 1D9kG6-mkB67V6JxIuQHZ0q-myzD8lwWFpr8PT-Iwe84) ƒ?" append a row to the instrument's tab (GER40/XAUUSD/NAS100/BTCUSD) with: Date, Time, Direction, Score, Verdict, Setup Type, Entry Price, ATR, BarSize/ATR, Entry Ratio, Swing Ratio, Red Flags. Use GOOGLE_APPLICATION_CREDENTIALS=/home/manu/.openclaw/credentials/google/drive-reader-key.json`;
+Instructions (FAST - 3 steps only):
+1. Analyze the M5 screenshot (path above) using the image tool. If H1 available, check it for context. Score per /home/manu/.openclaw/workspace/reference/trading/scoring-system.txt
+2. Post to #trading (target: 1475598923795136646): SCORE/10 | DIRECTION | SETUP TYPE | VERDICT (GO/CAUTION/SKIP) | RED FLAGS | REASON (1 line) | EXIT SUGGESTION
+3. Append ONE line to /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0, 10)}.jsonl with: time, symbol, direction, score, verdict, setup, reason, entry_price, atr, bar_size_atr, entry_ratio, swing_ratio, channel_dir, spread, screenshot_m5, screenshot_h1 from the signal data.
+
+Do NOT write to SQLite or Google Sheets - that is batched separately. Keep this FAST.`;
 
   return sendHook(msg, "agent:main:hook:trading");
 }
@@ -337,13 +335,11 @@ This is a review screenshot taken at market close. Signals that fired today: ${j
 
 Current price: ${jsonData.price} | Day High: ${jsonData.dayHigh} | Day Low: ${jsonData.dayLow}
 
-Instructions:
-1. Check #trading channel (1475598923795136646), read the latest signals from today
-2. Query SQLite: sqlite3 /home/manu/.openclaw/workspace/memory/trading/signals/signals.db "SELECT * FROM signals WHERE timestamp LIKE '${new Date().toISOString().slice(0, 10)}%' AND instrument='${(jsonData.symbol || "").replace(".r", "")}' ORDER BY timestamp"
-3. For each signal, compare your verdict (GO/CAUTION/SKIP) against actual price action using the close price (${jsonData.price}). Was the call correct?
-4. Post a detailed review to #trading for this instrument. Format: Day stats (high/low/close/range), then each signal reviewed with verdict assessment, then lessons learned.
-5. Update SQLite: UPDATE signals SET price_at_close=${jsonData.price}, outcome='CORRECT SKIP|MISSED|WRONG GO|etc', post_analysis='what happened' WHERE timestamp LIKE '${new Date().toISOString().slice(0, 10)}%' AND instrument='${(jsonData.symbol || "").replace(".r", "")}'
-6. Update Google Sheet "EOD Reviews" tab (ID: 1D9kG6-mkB67V6JxIuQHZ0q-myzD8lwWFpr8PT-Iwe84): append one row with Date, Instrument, Day High, Day Low, Close, Range, total signals, reviewed count, correct count, missed count, wrong count, accuracy %, and your full EOD analysis text in column M. Use GOOGLE_APPLICATION_CREDENTIALS=/home/manu/.openclaw/credentials/google/drive-reader-key.json`;
+Instructions (FAST - 2 steps only):
+1. Read today's JSONL: /home/manu/.openclaw/workspace/memory/trading/signals/${new Date().toISOString().slice(0, 10)}.jsonl - find entries for this instrument. Compare each verdict against the close price.
+2. Post a concise review to #trading (target: 1475598923795136646): Day stats, each signal verdict (correct/missed/wrong), lessons.
+
+Do NOT write to SQLite or Google Sheets - that is batched separately.`;
 
   return sendHook(msg, "agent:main:hook:trading");
 }
@@ -351,7 +347,7 @@ Instructions:
 function wakeKitForPosition(positionData) {
   const data = JSON.stringify(positionData);
 
-  const msg = `POSITION OPENED ƒ?" Exit management needed.
+  const msg = `POSITION OPENED  -  Exit management needed.
 
 Position data: ${data}
 
@@ -366,7 +362,7 @@ Instructions:
 4. Write the exit plan to the VPS via SSH:
    ${VPS_SSH_CMD} "node C:\\signal-watcher\\position-manager.js write-exit ${positionData.ticket} <SL> <TP> <trailActivation> <trailDistance>"
 5. Post to #trading (1475598923795136646): ÐY"' Managing [instrument] [direction] [lots]L @ [entry] | SL: [level] | TP: [level] | R:R: [ratio] | Trail: [details]
-6. If R:R < 1.0, do NOT write exit plan. Instead post warning: ƒsÿ‹÷? Cannot manage ƒ?" R:R too low`;
+6. If R:R < 1.0, do NOT write exit plan. Instead post warning: ƒsÿ‹÷? Cannot manage  -  R:R too low`;
 
   return sendHook(msg, "agent:main:hook:trading");
 }
@@ -409,7 +405,7 @@ async function processSignal(jsonPath) {
       h1Available = true;
       verbose("H1 screenshot found");
     } catch {
-      log("H1 screenshot not found (timeout) ƒ?" proceeding without it");
+      log("H1 screenshot not found (timeout)  -  proceeding without it");
     }
 
     // Upload M5 + H1 screenshots to local storage and Pi via SCP
@@ -461,7 +457,7 @@ async function processFollowup(jsonPath) {
       h1Available = true;
       verbose("H1 screenshot found");
     } catch {
-      log("H1 screenshot not found (timeout) ƒ?" proceeding without it");
+      log("H1 screenshot not found (timeout)  -  proceeding without it");
     }
 
     // Upload screenshots
@@ -472,7 +468,7 @@ async function processFollowup(jsonPath) {
     const images = [pngPath];
     if (h1Available) images.push(h1PngPath);
     await postFollowupToDiscord(images, jsonData);
-    log(`Posted follow-up to Discord: ${jsonData.symbol} ƒ?" signals: ${jsonData.signalsToday}${h1Available ? " (M5+H1)" : " (M5 only)"}`);
+    log(`Posted follow-up to Discord: ${jsonData.symbol}  -  signals: ${jsonData.signalsToday}${h1Available ? " (M5+H1)" : " (M5 only)"}`);
 
     // Build remote screenshot paths for Kit
     const baseName = path.basename(jsonPath).replace(/\.json$/, "");
@@ -503,7 +499,7 @@ async function handleJson(jsonPath) {
     if (jsonData.type === "market_state") {
       verbose(`Market state file detected: ${path.basename(jsonPath)}`);
       const history = appendHistory(jsonData);
-      log(`Market state: ${jsonData.symbol} ƒ?" ${history.length} snapshots today`);
+      log(`Market state: ${jsonData.symbol}  -  ${history.length} snapshots today`);
     } else if (jsonData.type === "followup") {
       processFollowup(jsonPath);
     } else {
@@ -620,7 +616,7 @@ function getTodayInstruments() {
 async function fireEodFollowup() {
   const instruments = getTodayInstruments();
   if (instruments.size === 0) {
-    log("EOD: No signals today ƒ?" skipping follow-up");
+    log("EOD: No signals today  -  skipping follow-up");
     return;
   }
 
@@ -662,14 +658,14 @@ if (!SIGNALS_FOLDER || !DISCORD_WEBHOOK) {
 }
 
 if (!REMOTE_HOST || !REMOTE_USER) {
-  log("ƒsÿ‹÷?  WARNING: REMOTE_HOST and/or REMOTE_USER not set ƒ?" screenshot uploads to Pi will be skipped");
+  log("ƒsÿ‹÷?  WARNING: REMOTE_HOST and/or REMOTE_USER not set  -  screenshot uploads to Pi will be skipped");
   log("   Set REMOTE_HOST and REMOTE_USER in .env to enable SCP uploads");
 }
 
 // Ensure all directories exist
 [SIGNALS_FOLDER, POSITIONS_DIR, CLOSED_DIR, EXITS_DIR, LOCAL_SCREENSHOT_DIR, HISTORY_DIR].forEach(ensureDir);
 
-log("=== watcher.js v3 ƒ?" Signal Watcher + Position Manager + Market State + EOD ===");
+log("=== watcher.js v3  -  Signal Watcher + Position Manager + Market State + EOD ===");
 log(`Signals:     ${SIGNALS_FOLDER}`);
 log(`Positions:   ${POSITIONS_DIR}`);
 log(`Closes:      ${CLOSED_DIR}`);
@@ -708,7 +704,7 @@ closeWatcher.on("add", (f) => {
   if (path.extname(f).toLowerCase() === ".json" && !f.includes(".processed")) processCloseFile(f);
 });
 
-// EOD timer ƒ?" checks every 60s, fires at 22:00 broker time on weekdays
+// EOD timer  -  checks every 60s, fires at 22:00 broker time on weekdays
 setInterval(() => {
   const b = getBrokerTime();
   const bd = b.toISOString().slice(0, 10);
@@ -722,11 +718,11 @@ setInterval(() => {
     const dow = b.getUTCDay();
     if (dow === 0 || dow === 6) {
       eodFiredToday = true;
-      verbose("EOD: Weekend ƒ?" skipping");
+      verbose("EOD: Weekend  -  skipping");
       return;
     }
     eodFiredToday = true;
-    log("EOD: 22:00 broker time ƒ?" firing end-of-day review");
+    log("EOD: 22:00 broker time  -  firing end-of-day review");
     fireEodFollowup().catch(err => log("EOD error:", err.message));
   }
 }, 60000);
