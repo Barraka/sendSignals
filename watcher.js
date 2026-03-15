@@ -170,6 +170,23 @@ function appendRawSignalToPi(jsonData, screenshotPaths) {
     source: "watcher",
   };
 
+  // Add entry_signal-specific fields if present
+  if (jsonData.type === "entry_signal") {
+    entry.type = "entry_signal";
+    entry.pattern = jsonData.pattern || "";
+    entry.barsAfterSignal = parseInt(jsonData.barsAfterSignal) || 0;
+    entry.sigBarTime = jsonData.sigBarTime || "";
+    entry.sigBarOpen = parseFloat(jsonData.sigBarOpen) || 0;
+    entry.sigBarHigh = parseFloat(jsonData.sigBarHigh) || 0;
+    entry.sigBarLow = parseFloat(jsonData.sigBarLow) || 0;
+    entry.sigBarClose = parseFloat(jsonData.sigBarClose) || 0;
+    entry.curOpen = parseFloat(jsonData.curOpen) || 0;
+    entry.curHigh = parseFloat(jsonData.curHigh) || 0;
+    entry.curLow = parseFloat(jsonData.curLow) || 0;
+    entry.curClose = parseFloat(jsonData.curClose) || 0;
+    entry.bodyWick = parseFloat(jsonData.bodyWick) || 0;
+  }
+
   const jsonLine = JSON.stringify(entry);
   // Escape single quotes for shell safety
   const escaped = jsonLine.replace(/'/g, "'\\''");
