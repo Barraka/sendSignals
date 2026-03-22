@@ -188,14 +188,14 @@ function appendRawSignalToPi(jsonData, screenshotPaths) {
   }
 
   const jsonLine = JSON.stringify(entry);
-  // Escape single quotes for shell safety
-  const escaped = jsonLine.replace(/'/g, "'\\''");
+  // Use printf with base64 to avoid all shell quoting issues
+  const b64 = Buffer.from(jsonLine + "\n").toString("base64");
 
   execFile("ssh", [
     "-o", "StrictHostKeyChecking=no",
     "-o", "ConnectTimeout=10",
     `${REMOTE_USER}@${REMOTE_HOST}`,
-    `mkdir -p "${REMOTE_JSONL_DIR}" && echo '${escaped}' >> "${targetFile}"`,
+    `mkdir -p ${REMOTE_JSONL_DIR} && echo ${b64} | base64 -d >> ${targetFile}`,
   ], (err, stdout, stderr) => {
     if (err) {
       log(`WARNING: Raw JSONL append failed for ${jsonData.symbol}: ${stderr || err.message}`);
